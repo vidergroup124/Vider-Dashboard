@@ -403,9 +403,9 @@ function renderDashboard() {
   // Unpaid interest for daily loans = total interest - paid interest
   const dailyInterest = dailyLoans.reduce((s, d) => {
     const totalInt = d.amount * d.rate;
-    const paidInt = (d.paidAmount || 0) * (totalInt / d.totalAmount);
+    const paidInt = d.totalAmount ? ((d.paidAmount || 0) * (totalInt / d.totalAmount)) : 0;
     return s + (totalInt - paidInt);
-  }, 0);
+  }, 0) || 0;
   const totalInterest = loanInterest + pawnInterest + dailyInterest;
 
   // Actual collected interest from transactions
@@ -1435,8 +1435,14 @@ document.getElementById('generateReport').addEventListener('click', () => {
   const year = thYear - 543;
 
   const txs = DB.get('transactions').filter(t => {
-    const d = new Date(t.date);
-    return d.getMonth() === month && d.getFullYear() === year;
+    if (!t.date) return false;
+    const parts = t.date.split('-');
+    if (parts.length === 3) {
+      const tYear = parseInt(parts[0], 10);
+      const tMonth = parseInt(parts[1], 10) - 1;
+      return tMonth === month && tYear === year;
+    }
+    return false;
   });
 
   const customers = DB.get('customers');
@@ -1444,10 +1450,11 @@ document.getElementById('generateReport').addEventListener('click', () => {
   const expense = txs.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
   const loanInterest = txs.filter(t => t.type === 'interest' && t.subType === 'loan').reduce((s, t) => s + t.amount, 0);
   const pawnInterest = txs.filter(t => t.type === 'interest' && t.subType === 'pawn').reduce((s, t) => s + t.amount, 0);
+  const dailyInterest = txs.filter(t => t.type === 'daily_payment').reduce((s, t) => s + (t.interestAmount || 0), 0);
 
   document.getElementById('report-income').textContent = formatMoney(income);
   document.getElementById('report-expense').textContent = formatMoney(expense);
-  document.getElementById('report-profit').textContent = formatMoney(income - expense);
+  document.getElementById('report-profit').textContent = formatMoney(loanInterest + pawnInterest + dailyInterest - expense);
   document.getElementById('report-loan-interest').textContent = formatMoney(loanInterest);
   document.getElementById('report-pawn-interest').textContent = formatMoney(pawnInterest);
 

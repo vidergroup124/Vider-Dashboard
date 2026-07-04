@@ -1440,16 +1440,21 @@ document.getElementById('generateReport').addEventListener('click', () => {
   });
 
   const customers = DB.get('customers');
-  const income = txs.filter(t => t.type !== 'expense').reduce((s, t) => s + t.amount, 0);
-  const expense = txs.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
   const loanInterest = txs.filter(t => t.type === 'interest' && t.subType === 'loan').reduce((s, t) => s + t.amount, 0);
   const pawnInterest = txs.filter(t => t.type === 'interest' && t.subType === 'pawn').reduce((s, t) => s + t.amount, 0);
+  const dailyInterest = txs.filter(t => t.type === 'daily_payment').reduce((s, t) => s + (t.interestAmount || 0), 0);
+  
+  const income = loanInterest + pawnInterest + dailyInterest; // รายรับที่แท้จริงคือดอกเบี้ยเท่านั้น
+  const expense = txs.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
 
   document.getElementById('report-income').textContent = formatMoney(income);
   document.getElementById('report-expense').textContent = formatMoney(expense);
   document.getElementById('report-profit').textContent = formatMoney(income - expense);
   document.getElementById('report-loan-interest').textContent = formatMoney(loanInterest);
   document.getElementById('report-pawn-interest').textContent = formatMoney(pawnInterest);
+  
+  const dailyInterestEl = document.getElementById('report-daily-interest');
+  if (dailyInterestEl) dailyInterestEl.textContent = formatMoney(dailyInterest);
 
   const typeLabels = { interest: 'รับดอกเบี้ย', loan_payment: 'รับคืนเงินกู้', pawn_redeem: 'ไถ่จำนำ', expense: 'รายจ่าย' };
   const typeBadges = { interest: 'badge-interest', loan_payment: 'badge-loan', pawn_redeem: 'badge-pawn', expense: 'badge-expense' };

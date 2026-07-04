@@ -413,8 +413,10 @@ function renderDashboard() {
   const collectedDailyInterest = txs.filter(t => t.type === 'daily_payment').reduce((s, t) => s + (t.interestAmount || 0), 0);
   const expenses = txs.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
   const profit = collectedInterest + collectedDailyInterest - expenses;
+  const collectedIncome = txs.filter(t => t.type !== 'expense').reduce((s, t) => s + t.amount, 0);
 
   document.getElementById('kpi-profit').textContent = formatMoney(profit);
+  document.getElementById('kpi-total-income').textContent = formatMoney(collectedIncome);
   document.getElementById('kpi-income').textContent = formatMoney(totalInterest);
   document.getElementById('kpi-income-sub').textContent = 'ดอกค้างรับทั้งหมด';
   document.getElementById('kpi-loans').textContent = formatMoney(totalLoan + totalDaily);

@@ -1702,7 +1702,8 @@ document.getElementById('confirmPayDaily').addEventListener('click', () => {
     return;
   }
 
-  const note = document.getElementById('payDailyNote').value;
+  const cust = DB.get('customers').find(c => c.id === item.customerId);
+  const note = document.getElementById('payDailyNote').value || `รับกู้รายวัน - ${cust?.name || ''}`;
 
   // Update loan
   const dailyLoans = DB.get('daily_loans');

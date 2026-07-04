@@ -1455,9 +1455,14 @@ document.getElementById('generateReport').addEventListener('click', () => {
   const dailyInterest = txs.filter(t => t.type === 'daily_payment').reduce((s, t) => s + (t.interestAmount || 0), 0);
 
   document.getElementById('report-income').textContent = formatMoney(income);
-  document.getElementById('report-expense').textContent = formatMoney(expense);
+  const expenseEl = document.getElementById('report-expense');
+  if (expenseEl) expenseEl.textContent = formatMoney(expense);
   document.getElementById('report-profit').textContent = formatMoney(loanInterest + pawnInterest + dailyInterest - expense);
   document.getElementById('report-loan-interest').textContent = formatMoney(loanInterest);
+  
+  const dailyInterestEl = document.getElementById('report-daily-interest');
+  if (dailyInterestEl) dailyInterestEl.textContent = formatMoney(dailyInterest);
+  
   document.getElementById('report-pawn-interest').textContent = formatMoney(pawnInterest);
 
   const typeLabels = { interest: 'รับดอกเบี้ย', loan_payment: 'รับคืนเงินกู้', pawn_redeem: 'ไถ่จำนำ', expense: 'รายจ่าย' };

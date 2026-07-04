@@ -1702,10 +1702,18 @@ document.getElementById('confirmPayDaily').addEventListener('click', () => {
     return;
   }
 
+  const note = document.getElementById('payDailyNote').value;
+
   // Update loan
   const dailyLoans = DB.get('daily_loans');
   const idx = dailyLoans.findIndex(l => l.id === id);
+  let interestAmount = 0;
+  
   if (idx >= 0) {
+    const loan = dailyLoans[idx];
+    const totalInt = loan.amount * loan.rate;
+    interestAmount = loan.totalAmount ? amount * (totalInt / loan.totalAmount) : 0;
+    
     dailyLoans[idx].paidAmount = (dailyLoans[idx].paidAmount || 0) + amount;
     if (dailyLoans[idx].paidAmount >= dailyLoans[idx].totalAmount) {
       dailyLoans[idx].status = 'paid';
@@ -1723,6 +1731,7 @@ document.getElementById('confirmPayDaily').addEventListener('click', () => {
     customerId: item.customerId,
     refId: item.id,
     amount: amount,
+    interestAmount: interestAmount,
     note: note,
     createdAt: Date.now(),
   });

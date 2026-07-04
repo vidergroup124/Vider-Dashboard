@@ -604,6 +604,7 @@ function renderCustomers(filter = '') {
         <td><span class="type-badge ${hasActive ? 'badge-active' : 'badge-paid'}">${hasActive ? 'มีสัญญา' : 'ไม่มีสัญญา'}</span></td>
         <td>
           <div class="action-btns">
+            <button class="btn-icon" title="ดูรายละเอียด" onclick="viewCustomerDetails('${c.id}')">📊</button>
             <button class="btn-icon edit" title="แก้ไข" onclick="editCustomer('${c.id}')">✏️</button>
             <button class="btn-icon delete" title="ลบ" onclick="deleteCustomer('${c.id}')">🗑️</button>
           </div>
@@ -666,6 +667,44 @@ function editCustomer(id) {
   const c = DB.get('customers').find(c => c.id === id);
   if (c) openCustomerModal(c);
 }
+
+function viewCustomerDetails(id) {
+  const c = DB.get('customers').find(c => c.id === id);
+  if (!c) return;
+
+  const allLoans = DB.get('loans').filter(l => l.customerId === id);
+  const allPawns = DB.get('pawns').filter(p => p.customerId === id);
+  const allDaily = DB.get('daily_loans').filter(d => d.customerId === id);
+  
+  const totalLoan = allLoans.reduce((s, l) => s + (l.amount || 0), 0);
+  const totalPawn = allPawns.reduce((s, p) => s + (p.amount || 0), 0);
+  const totalDaily = allDaily.reduce((s, d) => s + (d.amount || 0), 0);
+  const allTimePrincipal = totalLoan + totalPawn + totalDaily;
+
+  const txs = DB.get('transactions').filter(t => t.customerId === id);
+  const totalInterest = txs.filter(t => t.type === 'interest').reduce((s, t) => s + (t.amount || 0), 0);
+  const totalDailyInterest = txs.filter(t => t.type === 'daily_payment').reduce((s, t) => s + (t.interestAmount || 0), 0);
+  const allTimeProfit = totalInterest + totalDailyInterest;
+
+  document.getElementById('customerDetailsContent').innerHTML = `
+    <strong>ชื่อ:</strong> ${c.name}<br>
+    <strong>เบอร์โทร:</strong> ${c.phone || '-'}<br>
+    <hr style="margin: 1rem 0; border: none; border-top: 1px dashed var(--border-light);">
+    <strong style="color:var(--text-light)">ยอดกู้สะสมทั้งหมด (ทุกสัญญา):</strong><br>
+    - กู้ดอกสะสม: ${formatMoney(totalLoan)}<br>
+    - จำนำ: ${formatMoney(totalPawn)}<br>
+    - กู้รายวัน: ${formatMoney(totalDaily)}<br>
+    <strong>รวมยอดกู้ทั้งหมด:</strong> <span style="color:var(--accent-emerald);font-size:1.1rem">${formatMoney(allTimePrincipal)}</span><br>
+    <hr style="margin: 1rem 0; border: none; border-top: 1px dashed var(--border-light);">
+    <strong>กำไรที่ได้จากลูกค้ารายนี้ (เฉพาะดอกเบี้ย):</strong><br>
+    <span style="color:var(--accent-purple);font-size:1.2rem;font-weight:bold">${formatMoney(allTimeProfit)}</span>
+  `;
+
+  document.getElementById('customerDetailsModal').showModal();
+}
+
+document.getElementById('closeCustomerDetailsModal').addEventListener('click', () => document.getElementById('customerDetailsModal').close());
+document.getElementById('cancelCustomerDetails').addEventListener('click', () => document.getElementById('customerDetailsModal').close());
 
 function deleteCustomer(id) {
   openConfirm('ต้องการลบข้อมูลลูกค้านี้ใช่ไหม?', () => {

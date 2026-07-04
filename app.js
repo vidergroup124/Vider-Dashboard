@@ -215,7 +215,11 @@ function genId() {
 
 // Helpers
 function today() {
-  return new Date().toISOString().slice(0, 10);
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 function addDays(dateStr, days) {
@@ -1427,6 +1431,7 @@ function initReportPage() {
   const now = new Date();
   document.getElementById('reportMonth').value = now.getMonth();
   document.getElementById('reportYear').value = now.getFullYear() + 543;
+  document.getElementById('generateReport').click();
 }
 
 document.getElementById('generateReport').addEventListener('click', () => {
@@ -1435,8 +1440,14 @@ document.getElementById('generateReport').addEventListener('click', () => {
   const year = thYear - 543;
 
   const txs = DB.get('transactions').filter(t => {
-    const d = new Date(t.date);
-    return d.getMonth() === month && d.getFullYear() === year;
+    if (!t.date) return false;
+    const parts = t.date.split('-');
+    if (parts.length === 3) {
+      const tYear = parseInt(parts[0], 10);
+      const tMonth = parseInt(parts[1], 10) - 1;
+      return tMonth === month && tYear === year;
+    }
+    return false;
   });
 
   const customers = DB.get('customers');
@@ -1444,12 +1455,13 @@ document.getElementById('generateReport').addEventListener('click', () => {
   const pawnInterest = txs.filter(t => t.type === 'interest' && t.subType === 'pawn').reduce((s, t) => s + t.amount, 0);
   const dailyInterest = txs.filter(t => t.type === 'daily_payment').reduce((s, t) => s + (t.interestAmount || 0), 0);
   
-  const income = loanInterest + pawnInterest + dailyInterest; // รายรับที่แท้จริงคือดอกเบี้ยเท่านั้น
+  const income = txs.filter(t => t.type !== 'expense').reduce((s, t) => s + t.amount, 0); // รายรับรวมทั้งหมด (รวมทุน)
   const expense = txs.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+  const profit = loanInterest + pawnInterest + dailyInterest - expense; // กำไรสุทธิคือดอกเบี้ยหักรายจ่าย
 
   document.getElementById('report-income').textContent = formatMoney(income);
   document.getElementById('report-expense').textContent = formatMoney(expense);
-  document.getElementById('report-profit').textContent = formatMoney(income - expense);
+  document.getElementById('report-profit').textContent = formatMoney(profit);
   document.getElementById('report-loan-interest').textContent = formatMoney(loanInterest);
   document.getElementById('report-pawn-interest').textContent = formatMoney(pawnInterest);
   

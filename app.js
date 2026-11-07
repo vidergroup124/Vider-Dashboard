@@ -1463,59 +1463,469 @@ function deleteTransaction(id) {
 }
 
 // ============================================================
-// Reports
+// Reports & Financial Analysis + Export (Excel / PDF)
 // ============================================================
+const THAI_MONTHS_FULL = [
+  'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
+  'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'
+];
+
+let _reportInitialized = false;
+
 function initReportPage() {
-  const now = new Date();
-  document.getElementById('reportMonth').value = now.getMonth();
-  document.getElementById('reportYear').value = now.getFullYear() + 543;
+  if (!_reportInitialized) {
+    const now = new Date();
+    const mEl = document.getElementById('reportMonth');
+    const yEl = document.getElementById('reportYear');
+    if (mEl) mEl.value = now.getMonth();
+    if (yEl) yEl.value = now.getFullYear() + 543;
+    _reportInitialized = true;
+  }
+  renderReportPage();
 }
 
-document.getElementById('generateReport').addEventListener('click', () => {
-  const month = parseInt(document.getElementById('reportMonth').value);
-  const thYear = parseInt(document.getElementById('reportYear').value);
-  const year = thYear - 543;
-
-  const txs = DB.get('transactions').filter(t => {
-    if (!t.date) return false;
-    const parts = t.date.split('-');
+function filterByMonthYear(items, month, year) {
+  return (items || []).filter(item => {
+    if (!item.date) return false;
+    const parts = item.date.split('-');
     if (parts.length === 3) {
-      const tYear = parseInt(parts[0], 10);
-      const tMonth = parseInt(parts[1], 10) - 1;
-      return tMonth === month && tYear === year;
+      const iYear = parseInt(parts[0], 10);
+      const iMonth = parseInt(parts[1], 10) - 1;
+      return iMonth === month && iYear === year;
     }
     return false;
   });
+}
 
+function computeMonthlyReportData(month, thYear) {
+  const year = thYear - 543;
+  const monthName = THAI_MONTHS_FULL[month] || '';
+  const allTxs = DB.get('transactions');
   const customers = DB.get('customers');
-  const income = txs.filter(t => t.type !== 'expense').reduce((s, t) => s + t.amount, 0);
-  const expense = txs.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
-  const loanInterest = txs.filter(t => t.type === 'interest' && t.subType === 'loan').reduce((s, t) => s + t.amount, 0);
-  const pawnInterest = txs.filter(t => t.type === 'interest' && t.subType === 'pawn').reduce((s, t) => s + t.amount, 0);
-  const dailyInterest = txs.filter(t => t.type === 'daily_payment').reduce((s, t) => s + (t.interestAmount || 0), 0);
+  const allLoans = DB.get('loans');
+  const allDaily = DB.get('daily_loans');
+  const allPawns = DB.get('pawns');
 
-  document.getElementById('report-income').textContent = formatMoney(income);
+  const txs = filterByMonthYear(allTxs, month, year).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+  // Previous month for MoM comparison
+  const prevMonth = month === 0 ? 11 : month - 1;
+  const prevYear = month === 0 ? year - 1 : year;
+  const prevThYear = prevYear + 543;
+  const prevMonthName = THAI_MONTHS_FULL[prevMonth] || '';
+  const prevTxs = filterByMonthYear(allTxs, prevMonth, prevYear);
+
+  const calcTxMetrics = (txList) => {
+    const income = txList.filter(t => t.type !== 'expense').reduce((s, t) => s + (Number(t.amount) || 0), 0);
+    const expense = txList.filter(t => t.type === 'expense').reduce((s, t) => s + (Number(t.amount) || 0), 0);
+    const loanInterest = txList.filter(t => t.type === 'interest' && t.subType === 'loan').reduce((s, t) => s + (Number(t.amount) || 0), 0);
+    const pawnInterest = txList.filter(t => t.type === 'interest' && t.subType === 'pawn').reduce((s, t) => s + (Number(t.amount) || 0), 0);
+    const manualInterest = txList.filter(t => t.type === 'interest' && !t.subType).reduce((s, t) => s + (Number(t.amount) || 0), 0);
+    const dailyInterest = txList.filter(t => t.type === 'daily_payment').reduce((s, t) => s + (Number(t.interestAmount) || 0), 0);
+    const dailyTotalPaid = txList.filter(t => t.type === 'daily_payment').reduce((s, t) => s + (Number(t.amount) || 0), 0);
+    const dailyPrincipalReturned = Math.max(0, dailyTotalPaid - dailyInterest);
+    const loanPrincipalReturned = txList.filter(t => t.type === 'loan_payment').reduce((s, t) => s + (Number(t.amount) || 0), 0);
+    const pawnPrincipalRedeemed = txList.filter(t => t.type === 'pawn_redeem').reduce((s, t) => s + (Number(t.amount) || 0), 0);
+
+    const totalInterestIncome = loanInterest + pawnInterest + manualInterest + dailyInterest;
+    const totalPrincipalReturned = loanPrincipalReturned + pawnPrincipalRedeemed + dailyPrincipalReturned;
+    const netProfit = totalInterestIncome - expense;
+
+    return {
+      income,
+      expense,
+      loanInterest,
+      pawnInterest,
+      manualInterest,
+      dailyInterest,
+      dailyTotalPaid,
+      dailyPrincipalReturned,
+      loanPrincipalReturned,
+      pawnPrincipalRedeemed,
+      totalInterestIncome,
+      totalPrincipalReturned,
+      netProfit,
+    };
+  };
+
+  const curr = calcTxMetrics(txs);
+  const prev = calcTxMetrics(prevTxs);
+
+  // MoM Growth
+  const profitDiff = curr.netProfit - prev.netProfit;
+  const profitGrowthPct = prev.netProfit !== 0
+    ? ((curr.netProfit - prev.netProfit) / Math.abs(prev.netProfit)) * 100
+    : (curr.netProfit > 0 ? 100 : 0);
+
+  const incomeDiff = curr.income - prev.income;
+  const incomeGrowthPct = prev.income > 0
+    ? ((curr.income - prev.income) / prev.income) * 100
+    : (curr.income > 0 ? 100 : 0);
+
+  // Profitability & Efficiency Ratios
+  const netProfitMarginPct = curr.totalInterestIncome > 0
+    ? (curr.netProfit / curr.totalInterestIncome) * 100
+    : 0;
+  const expenseToInterestRatioPct = curr.totalInterestIncome > 0
+    ? (curr.expense / curr.totalInterestIncome) * 100
+    : (curr.expense > 0 ? 100 : 0);
+
+  // Product Share of Interest Revenue
+  const intBase = curr.totalInterestIncome || 1;
+  const loanInterestSharePct = curr.totalInterestIncome > 0 ? ((curr.loanInterest + curr.manualInterest) / intBase) * 100 : 0;
+  const dailyInterestSharePct = curr.totalInterestIncome > 0 ? (curr.dailyInterest / intBase) * 100 : 0;
+  const pawnInterestSharePct = curr.totalInterestIncome > 0 ? (curr.pawnInterest / intBase) * 100 : 0;
+
+  const productRevenues = [
+    { name: 'เงินกู้ดอกสะสมรายวัน', amount: curr.loanInterest + curr.manualInterest, share: loanInterestSharePct },
+    { name: 'เงินกู้รายวัน', amount: curr.dailyInterest, share: dailyInterestSharePct },
+    { name: 'จำนำ', amount: curr.pawnInterest, share: pawnInterestSharePct },
+  ].sort((a, b) => b.amount - a.amount);
+
+  const topProduct = curr.totalInterestIncome > 0 ? productRevenues[0].name : 'ยังไม่มีรายได้ดอกเบี้ย';
+
+  // New contracts disbursed in this month (Cash Outflow for Lending)
+  const newLoansInMonth = filterByMonthYear(allLoans, month, year);
+  const newDailyInMonth = filterByMonthYear(allDaily, month, year);
+  const newPawnsInMonth = filterByMonthYear(allPawns, month, year);
+
+  const newLoansAmount = newLoansInMonth.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+  const newDailyAmount = newDailyInMonth.reduce((s, d) => s + (Number(d.amount) || 0), 0);
+  const newPawnsAmount = newPawnsInMonth.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  const totalNewDisbursed = newLoansAmount + newDailyAmount + newPawnsAmount;
+  const totalNewContractsCount = newLoansInMonth.length + newDailyInMonth.length + newPawnsInMonth.length;
+
+  const totalCashOutflow = totalNewDisbursed + curr.expense;
+  const netCashFlow = curr.income - totalCashOutflow;
+
+  // Portfolio Risk & Health Snapshot (Active Contracts)
+  const activeLoans = allLoans.filter(l => l.status !== 'paid');
+  const activePawns = allPawns.filter(p => !['redeemed', 'forfeited'].includes(p.status));
+  const activeDaily = allDaily.filter(d => d.status !== 'paid');
+
+  const overdueLoans = activeLoans.filter(l => getContractStatus({ ...l, _loanDefault: true }) === 'overdue');
+  const overduePawns = activePawns.filter(p => getContractStatus(p) === 'overdue');
+  const overdueDaily = activeDaily.filter(d => {
+    const elapsedDays = daysBetween(d.date, today());
+    const expectedPaid = Math.min(d.totalAmount, elapsedDays * d.dailyInstallment);
+    return (d.paidAmount || 0) < expectedPaid;
+  });
+
+  const activeLoansPrincipal = activeLoans.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+  const activePawnsPrincipal = activePawns.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  const activeDailyPrincipal = activeDaily.reduce((s, d) => s + (Number(d.amount) || 0), 0);
+  const totalActivePrincipal = activeLoansPrincipal + activePawnsPrincipal + activeDailyPrincipal;
+
+  const unpaidLoanInterest = activeLoans.reduce((s, l) => s + calcUnpaidInterest({ ...l, _loanDefault: true }), 0);
+  const unpaidPawnInterest = activePawns.reduce((s, p) => s + calcUnpaidInterest(p), 0);
+  const unpaidDailyInterest = activeDaily.reduce((s, d) => {
+    const totalInt = (d.amount || 0) * (d.rate || 0);
+    const paidInt = d.totalAmount ? ((d.paidAmount || 0) * (totalInt / d.totalAmount)) : 0;
+    return s + Math.max(0, totalInt - paidInt);
+  }, 0);
+  const totalUnpaidInterest = unpaidLoanInterest + unpaidPawnInterest + unpaidDailyInterest;
+
+  const totalActiveContracts = activeLoans.length + activePawns.length + activeDaily.length;
+  const totalOverdueContracts = overdueLoans.length + overduePawns.length + overdueDaily.length;
+  const overdueRatePct = totalActiveContracts > 0 ? (totalOverdueContracts / totalActiveContracts) * 100 : 0;
+  const portfolioYieldRatePct = totalActivePrincipal > 0 ? (curr.totalInterestIncome / totalActivePrincipal) * 100 : 0;
+
+  // Top Customers in Month by Profit / Interest Contributed
+  const custContributionMap = new Map();
+  txs.forEach(t => {
+    if (t.type === 'expense' || !t.customerId) return;
+    const cust = customers.find(c => c.id === t.customerId);
+    const name = cust ? cust.name : 'ไม่ระบุชื่อ';
+    const current = custContributionMap.get(t.customerId) || { name, totalPaid: 0, interestPaid: 0, txCount: 0 };
+    current.totalPaid += Number(t.amount) || 0;
+    if (t.type === 'interest') current.interestPaid += Number(t.amount) || 0;
+    else if (t.type === 'daily_payment') current.interestPaid += Number(t.interestAmount) || 0;
+    current.txCount += 1;
+    custContributionMap.set(t.customerId, current);
+  });
+
+  const topCustomers = Array.from(custContributionMap.values())
+    .sort((a, b) => b.interestPaid - a.interestPaid || b.totalPaid - a.totalPaid)
+    .slice(0, 3);
+
+  // Smart Financial Insights & Recommendations
+  const insights = [];
+  if (curr.totalInterestIncome > 0) {
+    insights.push(
+      `ผลิตภัณฑ์ที่สร้างรายได้ดอกเบี้ยสูงสุดในเดือน${monthName} คือ "${topProduct}" คิดเป็น ${productRevenues[0].share.toFixed(1)}% ของรายได้ดอกเบี้ยรวม (${formatMoney(productRevenues[0].amount)})`
+    );
+  } else {
+    insights.push(`ยังไม่มีรายการรับชำระดอกเบี้ยในเดือน${monthName} ${thYear} แนะนำให้ตรวจสอบกำหนดชำระของสัญญาที่กำลังดำเนินการ`);
+  }
+
+  if (prev.netProfit !== 0 || prev.income !== 0) {
+    const dirText = profitDiff >= 0 ? 'เพิ่มขึ้น' : 'ลดลง';
+    insights.push(
+      `เปรียบเทียบกับเดือน${prevMonthName} ${prevThYear}: กำไรสุทธิ${dirText} ${formatMoney(Math.abs(profitDiff))} (${profitGrowthPct >= 0 ? '+' : ''}${profitGrowthPct.toFixed(1)}%) และรายรับรวม${incomeDiff >= 0 ? 'เพิ่มขึ้น' : 'ลดลง'} ${formatMoney(Math.abs(incomeDiff))}`
+    );
+  }
+
+  if (curr.expense > 0) {
+    if (expenseToInterestRatioPct > 35) {
+      insights.push(
+        `ข้อควรระวังด้านต้นทุน: อัตราส่วนรายจ่ายต่อรายได้ดอกเบี้ยอยู่ที่ ${expenseToInterestRatioPct.toFixed(1)}% ซึ่งค่อนข้างสูง ควรควบคุมรายจ่ายดำเนินงานเพื่อรักษากำไรสุทธิ`
+      );
+    } else {
+      insights.push(
+        `การควบคุมค่าใช้จ่ายอยู่ในเกณฑ์ดี: รายจ่ายคิดเป็น ${expenseToInterestRatioPct.toFixed(1)}% ของรายได้ดอกเบี้ย ทำให้อัตรากำไรสุทธิ (Net Profit Margin) สูงถึง ${netProfitMarginPct.toFixed(1)}%`
+      );
+    }
+  } else if (curr.totalInterestIncome > 0) {
+    insights.push(`ประสิทธิภาพการทำกำไรสูงสุด: ไม่มีรายจ่ายดำเนินงานในเดือนนี้ ทำให้อัตรากำไรสุทธิอยู่ที่ 100% ของรายได้ดอกเบี้ย`);
+  }
+
+  if (totalOverdueContracts > 0) {
+    insights.push(
+      `ความเสี่ยงพอร์ตสินเชื่อ: ปัจจุบันมีสัญญาค้างชำระรวม ${totalOverdueContracts} สัญญา (${overdueRatePct.toFixed(1)}% ของสัญญาที่เปิดอยู่) และมีดอกเบี้ยค้างรับสะสม ${formatMoney(totalUnpaidInterest)} ควรเร่งติดตามเก็บดอกเบี้ยค้างรับเพื่อเสริมสภาพคล่อง`
+    );
+  } else if (totalActiveContracts > 0) {
+    insights.push(
+      `คุณภาพพอร์ตสินเชื่อดีเยี่ยม: สัญญาที่กำลังดำเนินการทั้งหมด ${totalActiveContracts} สัญญา (เงินต้นรวม ${formatMoney(totalActivePrincipal)}) ไม่มีรายการค้างชำระเกินกำหนด`
+    );
+  }
+
+  if (totalNewDisbursed > 0) {
+    insights.push(
+      `กระแสเงินสดและการขยายพอร์ต: เดือนนี้มีการปล่อยกู้/รับจำนำใหม่ ${totalNewContractsCount} สัญญา เป็นเงินต้นรวม ${formatMoney(totalNewDisbursed)} ส่งผลให้กระแสเงินสดสุทธิประจำเดือนอยู่ที่ ${netCashFlow >= 0 ? '+' : '-'}${formatMoney(Math.abs(netCashFlow))}`
+    );
+  }
+
+  return {
+    month,
+    thYear,
+    year,
+    monthName,
+    txs,
+    customers,
+    ...curr,
+    analysis: {
+      prevMonthName,
+      prevThYear,
+      prevIncome: prev.income,
+      prevNetProfit: prev.netProfit,
+      prevExpense: prev.expense,
+      profitDiff,
+      profitGrowthPct,
+      incomeDiff,
+      incomeGrowthPct,
+      netProfitMarginPct,
+      expenseToInterestRatioPct,
+      loanInterestSharePct,
+      dailyInterestSharePct,
+      pawnInterestSharePct,
+      topProduct,
+      productRevenues,
+      newLoansCount: newLoansInMonth.length,
+      newDailyCount: newDailyInMonth.length,
+      newPawnsCount: newPawnsInMonth.length,
+      totalNewContractsCount,
+      newLoansAmount,
+      newDailyAmount,
+      newPawnsAmount,
+      totalNewDisbursed,
+      totalCashOutflow,
+      netCashFlow,
+      activeLoansCount: activeLoans.length,
+      activePawnsCount: activePawns.length,
+      activeDailyCount: activeDaily.length,
+      totalActiveContracts,
+      totalOverdueContracts,
+      overdueRatePct,
+      activeLoansPrincipal,
+      activePawnsPrincipal,
+      activeDailyPrincipal,
+      totalActivePrincipal,
+      unpaidLoanInterest,
+      unpaidPawnInterest,
+      unpaidDailyInterest,
+      totalUnpaidInterest,
+      portfolioYieldRatePct,
+      topCustomers,
+      insights,
+    }
+  };
+}
+
+function renderReportPage() {
+  const monthEl = document.getElementById('reportMonth');
+  const yearEl = document.getElementById('reportYear');
+  if (!monthEl || !yearEl) return;
+
+  const month = parseInt(monthEl.value, 10);
+  const thYear = parseInt(yearEl.value, 10);
+  const report = computeMonthlyReportData(month, thYear);
+  const { analysis } = report;
+
+  // Update KPI Cards
+  document.getElementById('report-income').textContent = formatMoney(report.income);
   const expenseEl = document.getElementById('report-expense');
-  if (expenseEl) expenseEl.textContent = formatMoney(expense);
-  document.getElementById('report-profit').textContent = formatMoney(loanInterest + pawnInterest + dailyInterest - expense);
-  document.getElementById('report-loan-interest').textContent = formatMoney(loanInterest);
-  
-  const dailyInterestEl = document.getElementById('report-daily-interest');
-  if (dailyInterestEl) dailyInterestEl.textContent = formatMoney(dailyInterest);
-  
-  document.getElementById('report-pawn-interest').textContent = formatMoney(pawnInterest);
+  if (expenseEl) expenseEl.textContent = formatMoney(report.expense);
+  document.getElementById('report-profit').textContent = formatMoney(report.netProfit);
+  document.getElementById('report-loan-interest').textContent = formatMoney(report.loanInterest + report.manualInterest);
 
-  const typeLabels = { interest: 'รับดอกเบี้ย', daily_payment: 'รับกู้รายวัน', loan_payment: 'รับคืนเงินกู้', pawn_redeem: 'ไถ่จำนำ', expense: 'รายจ่าย' };
-  const typeBadges = { interest: 'badge-interest', daily_payment: 'badge-loan', loan_payment: 'badge-loan', pawn_redeem: 'badge-pawn', expense: 'badge-expense' };
+  const dailyInterestEl = document.getElementById('report-daily-interest');
+  if (dailyInterestEl) dailyInterestEl.textContent = formatMoney(report.dailyInterest);
+
+  document.getElementById('report-pawn-interest').textContent = formatMoney(report.pawnInterest);
+
+  // Toggle & Render Financial Analysis Section
+  const includeAnalysis = document.getElementById('includeFinancialAnalysis')?.checked;
+  const analysisSection = document.getElementById('financialAnalysisSection');
+  const analysisBadge = document.getElementById('analysisPeriodBadge');
+  const analysisContent = document.getElementById('financialAnalysisContent');
+
+  if (analysisBadge) {
+    analysisBadge.textContent = `${report.monthName} ${report.thYear}`;
+  }
+
+  if (analysisSection) {
+    analysisSection.style.display = includeAnalysis ? 'block' : 'none';
+  }
+
+  if (analysisContent && includeAnalysis) {
+    const momColor = analysis.profitDiff >= 0 ? 'var(--accent-emerald)' : 'var(--accent-rose)';
+    const momSign = analysis.profitDiff >= 0 ? '+' : '-';
+    const cfColor = analysis.netCashFlow >= 0 ? 'var(--accent-emerald)' : 'var(--accent-rose)';
+    const cfSign = analysis.netCashFlow >= 0 ? '+' : '-';
+
+    analysisContent.innerHTML = `
+      <div class="analysis-grid">
+        <div class="analysis-box">
+          <div class="analysis-box-title">📊 ประสิทธิภาพการทำกำไร & เทียบเดือนก่อน</div>
+          <div class="analysis-stat-row">
+            <span class="analysis-stat-label">รายได้ดอกเบี้ยรวม:</span>
+            <span class="analysis-stat-val" style="color:var(--accent-gold)">${formatMoney(report.totalInterestIncome)}</span>
+          </div>
+          <div class="analysis-stat-row">
+            <span class="analysis-stat-label">เงินต้นที่ได้รับคืน:</span>
+            <span class="analysis-stat-val">${formatMoney(report.totalPrincipalReturned)}</span>
+          </div>
+          <div class="analysis-stat-row">
+            <span class="analysis-stat-label">อัตรากำไรสุทธิ (Net Margin):</span>
+            <span class="analysis-stat-val" style="color:var(--accent-emerald)">${analysis.netProfitMarginPct.toFixed(1)}%</span>
+          </div>
+          <div class="analysis-stat-row">
+            <span class="analysis-stat-label">สัดส่วนรายจ่ายต่อดอกเบี้ย:</span>
+            <span class="analysis-stat-val">${analysis.expenseToInterestRatioPct.toFixed(1)}%</span>
+          </div>
+          <div class="analysis-stat-row">
+            <span class="analysis-stat-label">เทียบเดือน${analysis.prevMonthName}:</span>
+            <span class="analysis-stat-val" style="color:${momColor}">
+              ${momSign}${formatMoney(Math.abs(analysis.profitDiff))} (${analysis.profitGrowthPct >= 0 ? '+' : ''}${analysis.profitGrowthPct.toFixed(1)}%)
+            </span>
+          </div>
+        </div>
+
+        <div class="analysis-box">
+          <div class="analysis-box-title">🥧 โครงสร้างรายได้ดอกเบี้ยตามผลิตภัณฑ์</div>
+          <div class="analysis-stat-row">
+            <span class="analysis-stat-label">กู้ดอกสะสมรายวัน:</span>
+            <span class="analysis-stat-val">${formatMoney(report.loanInterest + report.manualInterest)} (${analysis.loanInterestSharePct.toFixed(1)}%)</span>
+          </div>
+          <div class="analysis-stat-row">
+            <span class="analysis-stat-label">กู้รายวัน:</span>
+            <span class="analysis-stat-val">${formatMoney(report.dailyInterest)} (${analysis.dailyInterestSharePct.toFixed(1)}%)</span>
+          </div>
+          <div class="analysis-stat-row">
+            <span class="analysis-stat-label">จำนำ:</span>
+            <span class="analysis-stat-val">${formatMoney(report.pawnInterest)} (${analysis.pawnInterestSharePct.toFixed(1)}%)</span>
+          </div>
+          <div class="analysis-stat-row">
+            <span class="analysis-stat-label">พอร์ตทำกำไรสูงสุด:</span>
+            <span class="analysis-stat-val" style="color:var(--accent-gold)">${analysis.topProduct}</span>
+          </div>
+          <div class="analysis-stat-row">
+            <span class="analysis-stat-label">ผลตอบแทนต่อพอร์ต (Yield):</span>
+            <span class="analysis-stat-val">${analysis.portfolioYieldRatePct.toFixed(1)}% / เดือน</span>
+          </div>
+        </div>
+
+        <div class="analysis-box">
+          <div class="analysis-box-title">💸 การวิเคราะห์กระแสเงินสด (Cash Flow)</div>
+          <div class="analysis-stat-row">
+            <span class="analysis-stat-label">กระแสเงินสดรับเข้า (Inflow):</span>
+            <span class="analysis-stat-val" style="color:var(--accent-emerald)">+${formatMoney(report.income)}</span>
+          </div>
+          <div class="analysis-stat-row">
+            <span class="analysis-stat-label">ปล่อยกู้/รับจำนำใหม่ (${analysis.totalNewContractsCount} สัญญา):</span>
+            <span class="analysis-stat-val" style="color:var(--accent-rose)">-${formatMoney(analysis.totalNewDisbursed)}</span>
+          </div>
+          <div class="analysis-stat-row">
+            <span class="analysis-stat-label">รายจ่ายดำเนินงาน:</span>
+            <span class="analysis-stat-val" style="color:var(--accent-rose)">-${formatMoney(report.expense)}</span>
+          </div>
+          <div class="analysis-stat-row">
+            <span class="analysis-stat-label">กระแสเงินสดสุทธิประจำเดือน:</span>
+            <span class="analysis-stat-val" style="color:${cfColor}">${cfSign}${formatMoney(Math.abs(analysis.netCashFlow))}</span>
+          </div>
+        </div>
+
+        <div class="analysis-box">
+          <div class="analysis-box-title">🛡️ คุณภาพพอร์ต & ความเสี่ยงหนี้ค้างชำระ</div>
+          <div class="analysis-stat-row">
+            <span class="analysis-stat-label">เงินต้นคงค้างในระบบรวม:</span>
+            <span class="analysis-stat-val">${formatMoney(analysis.totalActivePrincipal)} (${analysis.totalActiveContracts} สัญญา)</span>
+          </div>
+          <div class="analysis-stat-row">
+            <span class="analysis-stat-label">ดอกเบี้ยค้างรับสะสมรวม:</span>
+            <span class="analysis-stat-val" style="color:var(--accent-gold)">${formatMoney(analysis.totalUnpaidInterest)}</span>
+          </div>
+          <div class="analysis-stat-row">
+            <span class="analysis-stat-label">สัญญาที่เกินกำหนดชำระ:</span>
+            <span class="analysis-stat-val" style="color:${analysis.totalOverdueContracts > 0 ? 'var(--accent-rose)' : 'var(--accent-emerald)'}">
+              ${analysis.totalOverdueContracts} สัญญา (${analysis.overdueRatePct.toFixed(1)}%)
+            </span>
+          </div>
+          <div class="analysis-stat-row">
+            <span class="analysis-stat-label">ลูกค้าที่สร้างรายได้สูงสุด:</span>
+            <span class="analysis-stat-val">
+              ${analysis.topCustomers.length > 0 ? `${analysis.topCustomers[0].name} (${formatMoney(analysis.topCustomers[0].interestPaid || analysis.topCustomers[0].totalPaid)})` : '-'}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div class="analysis-insights">
+        <div class="analysis-insights-title">💡 สรุปผลการวิเคราะห์และข้อเสนอแนะเชิงกลยุทธ์ (Executive Summary)</div>
+        <ul class="analysis-insight-list">
+          ${analysis.insights.map(item => `<li><span>•</span><span>${item}</span></li>`).join('')}
+        </ul>
+      </div>
+    `;
+  }
+
+  // Render Transactions Table
+  const typeLabels = {
+    interest: 'รับดอกเบี้ย',
+    daily_payment: 'รับกู้รายวัน',
+    loan_payment: 'รับคืนเงินกู้',
+    pawn_redeem: 'ไถ่จำนำ',
+    expense: 'รายจ่าย'
+  };
+  const typeBadges = {
+    interest: 'badge-interest',
+    daily_payment: 'badge-loan',
+    loan_payment: 'badge-loan',
+    pawn_redeem: 'badge-pawn',
+    expense: 'badge-expense'
+  };
+
+  const countBadge = document.getElementById('reportTxCount');
+  if (countBadge) countBadge.textContent = `${report.txs.length} รายการ`;
 
   const tbody = document.getElementById('reportTxBody');
-  if (txs.length === 0) {
+  if (report.txs.length === 0) {
     tbody.innerHTML = '<tr class="empty-row"><td colspan="5">ไม่มีรายการในช่วงนี้</td></tr>';
     return;
   }
 
-  tbody.innerHTML = txs.sort((a, b) => b.createdAt - a.createdAt).map(t => {
-    const cust = customers.find(c => c.id === t.customerId);
+  tbody.innerHTML = report.txs.map(t => {
+    const cust = report.customers.find(c => c.id === t.customerId);
     const isIncome = t.type !== 'expense';
     return `
       <tr>
@@ -1528,7 +1938,616 @@ document.getElementById('generateReport').addEventListener('click', () => {
         </td>
       </tr>`;
   }).join('');
+
+  if (typeof window.updateTableLabels === 'function') {
+    window.updateTableLabels();
+  }
+}
+
+document.getElementById('generateReport')?.addEventListener('click', () => {
+  renderReportPage();
+  showToast('สร้างรายงานประจำเดือนเรียบร้อยแล้ว');
 });
+
+document.getElementById('reportMonth')?.addEventListener('change', renderReportPage);
+document.getElementById('reportYear')?.addEventListener('change', renderReportPage);
+document.getElementById('includeFinancialAnalysis')?.addEventListener('change', renderReportPage);
+
+function triggerBlobDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.style.display = 'none';
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, 2000);
+}
+
+// ============================================================
+// Export Report to Excel (.xlsx with fallback to .xls)
+// ============================================================
+function exportReportToExcel() {
+  try {
+    const month = parseInt(document.getElementById('reportMonth').value, 10);
+    const thYear = parseInt(document.getElementById('reportYear').value, 10);
+    const includeAnalysis = Boolean(document.getElementById('includeFinancialAnalysis')?.checked);
+
+    renderReportPage();
+
+    const report = computeMonthlyReportData(month, thYear);
+    const { analysis } = report;
+    const managerName = sessionStorage.getItem('vider_manager') || 'ผู้จัดการระบบ';
+    const exportDateStr = formatDate(today());
+    const typeLabels = {
+      interest: 'รับดอกเบี้ย',
+      daily_payment: 'รับกู้รายวัน',
+      loan_payment: 'รับคืนเงินกู้',
+      pawn_redeem: 'ไถ่จำนำ',
+      expense: 'รายจ่าย'
+    };
+
+    // Sheet 1: สรุปรายงานประจำเดือน
+    const summaryRows = [
+      ['รายงานการเงินประจำเดือน - Vider Finance'],
+      [`ประจำเดือน: ${report.monthName} พ.ศ. ${report.thYear}`, '', `วันที่ออกรายงาน: ${exportDateStr}`, `ผู้ออกรายงาน: ${managerName}`],
+      [],
+      ['สรุปผลประกอบการหลักประจำเดือน (Monthly KPI Summary)'],
+      ['หัวข้อรายการ', 'จำนวนเงิน (บาท)', 'สัดส่วน / หมายเหตุ'],
+      ['รายรับรวมทั้งหมด (รวมเงินต้นรับคืน)', report.income, 'รายรับเงินสดเข้าทั้งหมดในเดือนนี้'],
+      ['รายได้ดอกเบี้ยรวมทั้งหมด', report.totalInterestIncome, 'กำไรขั้นต้นจากดอกเบี้ยก่อนหักค่าใช้จ่าย'],
+      ['  - ดอกเบี้ยรับ (กู้ดอกสะสมรายวัน)', report.loanInterest + report.manualInterest, `${analysis.loanInterestSharePct.toFixed(1)}% ของรายได้ดอกเบี้ย`],
+      ['  - ดอกเบี้ยรับ (กู้รายวัน)', report.dailyInterest, `${analysis.dailyInterestSharePct.toFixed(1)}% ของรายได้ดอกเบี้ย`],
+      ['  - ดอกเบี้ยรับ (จำนำ)', report.pawnInterest, `${analysis.pawnInterestSharePct.toFixed(1)}% ของรายได้ดอกเบี้ย`],
+      ['เงินต้นที่ได้รับชำระคืนรวม', report.totalPrincipalReturned, 'คืนเงินกู้ + ไถ่จำนำ + เงินต้นรายวัน'],
+      ['รายจ่ายดำเนินงานทั้งหมด', report.expense, `${analysis.expenseToInterestRatioPct.toFixed(1)}% ของรายได้ดอกเบี้ย`],
+      ['กำไรสุทธิประจำเดือน (Net Profit)', report.netProfit, `อัตรากำไรสุทธิ ${analysis.netProfitMarginPct.toFixed(1)}%`],
+    ];
+
+    // Sheet 2 (Optional): วิเคราะห์การเงินเชิงลึก
+    const analysisRows = [
+      [`บทวิเคราะห์การเงินเชิงลึก (Financial Analysis) - เดือน${report.monthName} พ.ศ. ${report.thYear}`],
+      [],
+      ['หมวดหมู่การวิเคราะห์', 'ตัวชี้วัดทางการเงิน (Metric)', 'ค่าที่ได้ / ผลลัพธ์', 'คำอธิบายและการตีความ'],
+      ['1. เปรียบเทียบเดือนก่อน (MoM)', `กำไรสุทธิเทียบเดือน${analysis.prevMonthName} ${analysis.prevThYear}`, analysis.profitDiff, `เปลี่ยนแปลง ${analysis.profitGrowthPct >= 0 ? '+' : ''}${analysis.profitGrowthPct.toFixed(1)}% (เดือนก่อน ${formatMoney(analysis.prevNetProfit)})`],
+      ['1. เปรียบเทียบเดือนก่อน (MoM)', `รายรับรวมเทียบเดือน${analysis.prevMonthName} ${analysis.prevThYear}`, analysis.incomeDiff, `เปลี่ยนแปลง ${analysis.incomeGrowthPct >= 0 ? '+' : ''}${analysis.incomeGrowthPct.toFixed(1)}% (เดือนก่อน ${formatMoney(analysis.prevIncome)})`],
+      ['2. ประสิทธิภาพการทำกำไร', 'อัตรากำไรสุทธิ (Net Profit Margin)', `${analysis.netProfitMarginPct.toFixed(2)}%`, 'กำไรสุทธิเทียบกับรายได้ดอกเบี้ยรวม'],
+      ['2. ประสิทธิภาพการทำกำไร', 'อัตราส่วนค่าใช้จ่ายต่อรายได้ดอกเบี้ย', `${analysis.expenseToInterestRatioPct.toFixed(2)}%`, 'รายจ่ายดำเนินงานเทียบกับรายได้ดอกเบี้ยรวม'],
+      ['2. ประสิทธิภาพการทำกำไร', 'ผลิตภัณฑ์ที่ทำกำไรสูงสุดประจำเดือน', analysis.topProduct, 'พิจารณาจากยอดดอกเบี้ยรับจริงในเดือน'],
+      ['2. ประสิทธิภาพการทำกำไร', 'อัตราผลตอบแทนต่อพอร์ต (Monthly Portfolio Yield)', `${analysis.portfolioYieldRatePct.toFixed(2)}%`, 'รายได้ดอกเบี้ยเดือนนี้เทียบกับเงินต้นคงค้างรวม'],
+      ['3. กระแสเงินสด (Cash Flow)', 'กระแสเงินสดรับเข้า (Cash Inflow)', report.income, 'รวมดอกเบี้ยรับและเงินต้นรับคืน'],
+      ['3. กระแสเงินสด (Cash Flow)', 'ยอดปล่อยกู้/รับจำนำใหม่ในเดือน (Disbursement)', analysis.totalNewDisbursed, `รวม ${analysis.totalNewContractsCount} สัญญาใหม่ (กู้ ${analysis.newLoansCount}, รายวัน ${analysis.newDailyCount}, จำนำ ${analysis.newPawnsCount})`],
+      ['3. กระแสเงินสด (Cash Flow)', 'กระแสเงินสดจ่ายออกรวม (Cash Outflow)', analysis.totalCashOutflow, 'ยอดปล่อยสินเชื่อใหม่ + รายจ่ายดำเนินงาน'],
+      ['3. กระแสเงินสด (Cash Flow)', 'กระแสเงินสดสุทธิประจำเดือน (Net Cash Flow)', analysis.netCashFlow, analysis.netCashFlow >= 0 ? 'สภาพคล่องเป็นบวก (เงินสดสุทธิเพิ่มขึ้น)' : 'สภาพคล่องลดลงจากการปล่อยสินเชื่อขยายพอร์ต'],
+      ['4. ความเสี่ยงและคุณภาพพอร์ต', 'เงินต้นคงค้างในระบบปัจจุบันรวม', analysis.totalActivePrincipal, `รวม ${analysis.totalActiveContracts} สัญญาที่กำลังดำเนินการ`],
+      ['4. ความเสี่ยงและคุณภาพพอร์ต', '  - เงินต้นกู้ดอกสะสมรายวันคงค้าง', analysis.activeLoansPrincipal, `${analysis.activeLoansCount} สัญญา`],
+      ['4. ความเสี่ยงและคุณภาพพอร์ต', '  - เงินต้นกู้รายวันคงค้าง', analysis.activeDailyPrincipal, `${analysis.activeDailyCount} สัญญา`],
+      ['4. ความเสี่ยงและคุณภาพพอร์ต', '  - เงินต้นจำนำคงค้าง', analysis.activePawnsPrincipal, `${analysis.activePawnsCount} รายการ`],
+      ['4. ความเสี่ยงและคุณภาพพอร์ต', 'ดอกเบี้ยค้างรับสะสมรวม (Unpaid Interest)', analysis.totalUnpaidInterest, `กู้สะสม ${formatMoney(analysis.unpaidLoanInterest)} | รายวัน ${formatMoney(analysis.unpaidDailyInterest)} | จำนำ ${formatMoney(analysis.unpaidPawnInterest)}`],
+      ['4. ความเสี่ยงและคุณภาพพอร์ต', 'สัญญาที่เกินกำหนดชำระ (Overdue Contracts)', `${analysis.totalOverdueContracts} สัญญา`, `คิดเป็น ${analysis.overdueRatePct.toFixed(1)}% ของสัญญาที่เปิดอยู่ทั้งหมด`],
+      [],
+      ['5. ลูกค้าที่สร้างรายได้สูงสุดประจำเดือน (Top Customers)'],
+      ['อันดับ', 'ชื่อลูกค้า', 'ดอกเบี้ยที่ชำระในเดือน (บาท)', 'ยอดชำระรวมทั้งหมด (บาท)']
+    ];
+
+    if (analysis.topCustomers.length === 0) {
+      analysisRows.push(['-', 'ไม่มีข้อมูลลูกค้าในเดือนนี้', 0, 0]);
+    } else {
+      analysis.topCustomers.forEach((c, idx) => {
+        analysisRows.push([idx + 1, c.name, Math.round(c.interestPaid * 100) / 100, Math.round(c.totalPaid * 100) / 100]);
+      });
+    }
+
+    analysisRows.push([], ['6. สรุปผลการวิเคราะห์และข้อเสนอแนะเชิงกลยุทธ์ (Executive Summary)']);
+    analysis.insights.forEach((insight, idx) => {
+      analysisRows.push([`ข้อที่ ${idx + 1}`, insight]);
+    });
+
+    if (includeAnalysis) {
+      summaryRows.push(
+        [],
+        ['สรุปไฮไลท์การวิเคราะห์การเงิน (ดูรายละเอียดฉบับเต็มได้ที่ชีต "วิเคราะห์การเงินเชิงลึก")'],
+        ['อัตรากำไรสุทธิ (Net Margin)', `${analysis.netProfitMarginPct.toFixed(1)}%`, `เทียบเดือน${analysis.prevMonthName}: ${analysis.profitGrowthPct >= 0 ? '+' : ''}${analysis.profitGrowthPct.toFixed(1)}%`],
+        ['กระแสเงินสดสุทธิ (Net Cash Flow)', analysis.netCashFlow, `ปล่อยสินเชื่อใหม่เดือนนี้ ${analysis.totalNewContractsCount} สัญญา (${formatMoney(analysis.totalNewDisbursed)})`],
+        ['ความเสี่ยงหนี้ค้างชำระ (Overdue Rate)', `${analysis.overdueRatePct.toFixed(1)}%`, `ค้างชำระ ${analysis.totalOverdueContracts} สัญญา | ดอกค้างรับรวม ${formatMoney(analysis.totalUnpaidInterest)}`]
+      );
+    }
+
+    // Sheet: รายการธุรกรรม
+    const txRows = [
+      [`รายการธุรกรรมประจำเดือน ${report.monthName} พ.ศ. ${report.thYear} (${report.txs.length} รายการ)`],
+      [],
+      ['ลำดับ', 'วันที่', 'ประเภทธุรกรรม', 'ชื่อลูกค้า', 'เบอร์โทรศัพท์', 'รายละเอียด / หมายเหตุ', 'รายรับ (บาท)', 'รายจ่าย (บาท)', 'ส่วนที่เป็นกำไรดอกเบี้ย (บาท)', 'จำนวนเงินสุทธิ (บาท)']
+    ];
+
+    report.txs.forEach((t, idx) => {
+      const cust = report.customers.find(c => c.id === t.customerId);
+      const isIncome = t.type !== 'expense';
+      const amt = Number(t.amount) || 0;
+      const profitPart = t.type === 'interest'
+        ? amt
+        : (t.type === 'daily_payment' ? (Number(t.interestAmount) || 0) : 0);
+
+      txRows.push([
+        idx + 1,
+        formatDate(t.date),
+        typeLabels[t.type] || t.type,
+        cust?.name || '-',
+        cust?.phone || '-',
+        t.note || '-',
+        isIncome ? amt : 0,
+        isIncome ? 0 : amt,
+        Math.round(profitPart * 100) / 100,
+        isIncome ? amt : -amt
+      ]);
+    });
+
+    txRows.push(
+      [],
+      [
+        '',
+        '',
+        '',
+        '',
+        '',
+        'รวมทั้งหมด (Total)',
+        report.income,
+        report.expense,
+        Math.round(report.totalInterestIncome * 100) / 100,
+        report.income - report.expense
+      ]
+    );
+
+    const fileBaseName = `รายงานการเงิน_ViderFinance_${report.monthName}_${report.thYear}${includeAnalysis ? '_พร้อมวิเคราะห์การเงิน' : ''}`;
+
+    if (typeof window.XLSX !== 'undefined') {
+      const wb = window.XLSX.utils.book_new();
+
+      const wsSummary = window.XLSX.utils.aoa_to_sheet(summaryRows);
+      wsSummary['!cols'] = [{ wch: 38 }, { wch: 24 }, { wch: 48 }, { wch: 30 }];
+      window.XLSX.utils.book_append_sheet(wb, wsSummary, 'สรุปรายงานประจำเดือน');
+
+      if (includeAnalysis) {
+        const wsAnalysis = window.XLSX.utils.aoa_to_sheet(analysisRows);
+        wsAnalysis['!cols'] = [{ wch: 30 }, { wch: 42 }, { wch: 22 }, { wch: 52 }];
+        window.XLSX.utils.book_append_sheet(wb, wsAnalysis, 'วิเคราะห์การเงินเชิงลึก');
+      }
+
+      const wsTx = window.XLSX.utils.aoa_to_sheet(txRows);
+      wsTx['!cols'] = [
+        { wch: 8 }, { wch: 14 }, { wch: 18 }, { wch: 24 }, { wch: 16 },
+        { wch: 36 }, { wch: 16 }, { wch: 16 }, { wch: 24 }, { wch: 18 }
+      ];
+      window.XLSX.utils.book_append_sheet(wb, wsTx, 'รายการธุรกรรม');
+
+      const wbBuffer = window.XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+      const blob = new Blob([wbBuffer], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      });
+      triggerBlobDownload(blob, `${fileBaseName}.xlsx`);
+      showToast(`ดาวน์โหลดไฟล์ Excel (${fileBaseName}.xlsx) สำเร็จ`);
+      return;
+    }
+
+    // Offline Fallback: .xls HTML Workbook with UTF-8 BOM
+    const escapeHtml = (val) => String(val ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const rowsToHtmlTable = (rows) => `
+      <table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;font-family:'Noto Sans Thai',Tahoma,sans-serif;font-size:11pt;">
+        ${rows.map((r, rIdx) => `
+          <tr style="${rIdx === 0 ? 'background:#f59e0b;color:#000;font-weight:bold;font-size:13pt;' : ''}">
+            ${r.map(cell => `<td style="border:1px solid #cbd5e1;padding:6px;">${escapeHtml(cell)}</td>`).join('')}
+          </tr>
+        `).join('')}
+      </table>
+    `;
+
+    const xlsHtml = `
+      <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+      <head><meta charset="UTF-8"></head>
+      <body>
+        ${rowsToHtmlTable(summaryRows)}
+        ${includeAnalysis ? `<br/><br/>${rowsToHtmlTable(analysisRows)}` : ''}
+        <br/><br/>
+        ${rowsToHtmlTable(txRows)}
+      </body>
+      </html>
+    `;
+
+    const blob = new Blob(['\uFEFF' + xlsHtml], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+    triggerBlobDownload(blob, `${fileBaseName}.xls`);
+    showToast(`ดาวน์โหลดไฟล์ Excel (${fileBaseName}.xls) สำเร็จ`);
+  } catch (err) {
+    console.error('Excel Export Error:', err);
+    showToast('เกิดข้อผิดพลาดในการส่งออก Excel: ' + err.message, 'error');
+  }
+}
+
+// ============================================================
+// Export Report to PDF (Multi-page A4 with Thai font support)
+// ============================================================
+function buildReportPdfBlocks(report, includeAnalysis) {
+  const { analysis } = report;
+  const managerName = sessionStorage.getItem('vider_manager') || 'ผู้จัดการระบบ';
+  const exportDateStr = formatDate(today());
+  const typeLabels = {
+    interest: 'รับดอกเบี้ย',
+    daily_payment: 'รับกู้รายวัน',
+    loan_payment: 'รับคืนเงินกู้',
+    pawn_redeem: 'ไถ่จำนำ',
+    expense: 'รายจ่าย'
+  };
+  const escapeHtml = (val) => String(val ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const blocks = [];
+
+  // Block 1: Document Header + KPI Summary
+  blocks.push(`
+    <div style="margin-bottom:18px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #0f172a;padding-bottom:14px;margin-bottom:18px;">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <div style="width:40px;height:40px;border-radius:8px;background:#f59e0b;color:#0f172a;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:20px;">₿</div>
+          <div>
+            <div style="margin:0;font-size:22px;font-weight:700;color:#0f172a;line-height:1.2;">Vider Finance</div>
+            <div style="font-size:12px;color:#475569;">ระบบบริหารจัดการสินเชื่อเงินกู้และจำนำครบวงจร</div>
+          </div>
+        </div>
+        <div style="text-align:right;font-size:12px;color:#334155;">
+          <div style="font-size:16px;font-weight:700;color:#0f172a;">รายงานการเงินประจำเดือน${escapeHtml(report.monthName)} พ.ศ. ${report.thYear}</div>
+          <div>วันที่ออกรายงาน: ${exportDateStr}</div>
+          <div>ผู้จัดการผู้ออกรายงาน: ${escapeHtml(managerName)}</div>
+        </div>
+      </div>
+
+      <div style="font-size:15px;font-weight:700;color:#0f172a;border-left:4px solid #0f172a;padding-left:10px;margin-bottom:12px;">
+        ส่วนที่ 1: สรุปผลประกอบการประจำเดือน (Executive KPI Summary)
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3, 1fr);gap:10px;">
+        <div style="border:1px solid #cbd5e1;border-left:4px solid #f59e0b;border-radius:6px;padding:10px 12px;background:#fffbeb;">
+          <div style="font-size:11.5px;color:#475569;">รายรับรวมทั้งหมด (รวมเงินต้นคืน)</div>
+          <div style="font-size:18px;font-weight:700;color:#0f172a;">${formatMoney(report.income)}</div>
+        </div>
+        <div style="border:1px solid #cbd5e1;border-left:4px solid #10b981;border-radius:6px;padding:10px 12px;background:#ecfdf5;">
+          <div style="font-size:11.5px;color:#475569;">กำไรสุทธิประจำเดือน (Net Profit)</div>
+          <div style="font-size:18px;font-weight:700;color:#059669;">${formatMoney(report.netProfit)}</div>
+        </div>
+        <div style="border:1px solid #cbd5e1;border-left:4px solid #f43f5e;border-radius:6px;padding:10px 12px;background:#fff1f2;">
+          <div style="font-size:11.5px;color:#475569;">รายจ่ายดำเนินงานทั้งหมด</div>
+          <div style="font-size:18px;font-weight:700;color:#e11d48;">${formatMoney(report.expense)}</div>
+        </div>
+        <div style="border:1px solid #cbd5e1;border-radius:6px;padding:10px 12px;background:#f8fafc;">
+          <div style="font-size:11.5px;color:#475569;">ดอกเบี้ยรับ (กู้ดอกสะสมรายวัน)</div>
+          <div style="font-size:16px;font-weight:700;color:#0f172a;">${formatMoney(report.loanInterest + report.manualInterest)}</div>
+        </div>
+        <div style="border:1px solid #cbd5e1;border-radius:6px;padding:10px 12px;background:#f8fafc;">
+          <div style="font-size:11.5px;color:#475569;">ดอกเบี้ยรับ (กู้รายวัน)</div>
+          <div style="font-size:16px;font-weight:700;color:#0f172a;">${formatMoney(report.dailyInterest)}</div>
+        </div>
+        <div style="border:1px solid #cbd5e1;border-radius:6px;padding:10px 12px;background:#f8fafc;">
+          <div style="font-size:11.5px;color:#475569;">ดอกเบี้ยรับ (จำนำ)</div>
+          <div style="font-size:16px;font-weight:700;color:#0f172a;">${formatMoney(report.pawnInterest)}</div>
+        </div>
+      </div>
+    </div>
+  `);
+
+  // Optional Blocks 2 & 3: Financial Analysis
+  if (includeAnalysis) {
+    blocks.push(`
+      <div style="margin-bottom:14px;">
+        <div style="font-size:15px;font-weight:700;color:#0f172a;border-left:4px solid #d97706;padding-left:10px;margin-bottom:12px;">
+          ส่วนที่ 2: บทวิเคราะห์การเงินเชิงลึก (Financial Analysis)
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div style="border:1px solid #cbd5e1;border-radius:8px;padding:12px;background:#f8fafc;">
+            <div style="font-weight:700;color:#b45309;margin-bottom:6px;font-size:13px;">📊 ประสิทธิภาพการทำกำไร & เทียบเดือนก่อน</div>
+            <table style="width:100%;font-size:12px;border-collapse:collapse;">
+              <tr><td style="padding:3px 0;color:#475569;">รายได้ดอกเบี้ยรวม:</td><td style="text-align:right;font-weight:600;">${formatMoney(report.totalInterestIncome)}</td></tr>
+              <tr><td style="padding:3px 0;color:#475569;">เงินต้นที่ได้รับคืน:</td><td style="text-align:right;font-weight:600;">${formatMoney(report.totalPrincipalReturned)}</td></tr>
+              <tr><td style="padding:3px 0;color:#475569;">อัตรากำไรสุทธิ (Net Margin):</td><td style="text-align:right;font-weight:600;color:#059669;">${analysis.netProfitMarginPct.toFixed(1)}%</td></tr>
+              <tr><td style="padding:3px 0;color:#475569;">สัดส่วนรายจ่ายต่อดอกเบี้ย:</td><td style="text-align:right;font-weight:600;">${analysis.expenseToInterestRatioPct.toFixed(1)}%</td></tr>
+              <tr><td style="padding:3px 0;color:#475569;">เทียบเดือน${analysis.prevMonthName}:</td><td style="text-align:right;font-weight:600;color:${analysis.profitDiff >= 0 ? '#059669' : '#e11d48'};">${analysis.profitDiff >= 0 ? '+' : '-'}${formatMoney(Math.abs(analysis.profitDiff))} (${analysis.profitGrowthPct >= 0 ? '+' : ''}${analysis.profitGrowthPct.toFixed(1)}%)</td></tr>
+            </table>
+          </div>
+
+          <div style="border:1px solid #cbd5e1;border-radius:8px;padding:12px;background:#f8fafc;">
+            <div style="font-weight:700;color:#b45309;margin-bottom:6px;font-size:13px;">🥧 โครงสร้างรายได้ดอกเบี้ยตามผลิตภัณฑ์</div>
+            <table style="width:100%;font-size:12px;border-collapse:collapse;">
+              <tr><td style="padding:3px 0;color:#475569;">กู้ดอกสะสมรายวัน:</td><td style="text-align:right;font-weight:600;">${formatMoney(report.loanInterest + report.manualInterest)} (${analysis.loanInterestSharePct.toFixed(1)}%)</td></tr>
+              <tr><td style="padding:3px 0;color:#475569;">กู้รายวัน:</td><td style="text-align:right;font-weight:600;">${formatMoney(report.dailyInterest)} (${analysis.dailyInterestSharePct.toFixed(1)}%)</td></tr>
+              <tr><td style="padding:3px 0;color:#475569;">จำนำ:</td><td style="text-align:right;font-weight:600;">${formatMoney(report.pawnInterest)} (${analysis.pawnInterestSharePct.toFixed(1)}%)</td></tr>
+              <tr><td style="padding:3px 0;color:#475569;">พอร์ตทำกำไรสูงสุด:</td><td style="text-align:right;font-weight:600;color:#b45309;">${escapeHtml(analysis.topProduct)}</td></tr>
+              <tr><td style="padding:3px 0;color:#475569;">ผลตอบแทนต่อพอร์ต (Yield):</td><td style="text-align:right;font-weight:600;">${analysis.portfolioYieldRatePct.toFixed(1)}% / เดือน</td></tr>
+            </table>
+          </div>
+
+          <div style="border:1px solid #cbd5e1;border-radius:8px;padding:12px;background:#f8fafc;">
+            <div style="font-weight:700;color:#b45309;margin-bottom:6px;font-size:13px;">💸 การวิเคราะห์กระแสเงินสด (Cash Flow)</div>
+            <table style="width:100%;font-size:12px;border-collapse:collapse;">
+              <tr><td style="padding:3px 0;color:#475569;">เงินสดรับเข้า (Inflow):</td><td style="text-align:right;font-weight:600;color:#059669;">+${formatMoney(report.income)}</td></tr>
+              <tr><td style="padding:3px 0;color:#475569;">ปล่อยกู้/จำนำใหม่ (${analysis.totalNewContractsCount} สัญญา):</td><td style="text-align:right;font-weight:600;color:#e11d48;">-${formatMoney(analysis.totalNewDisbursed)}</td></tr>
+              <tr><td style="padding:3px 0;color:#475569;">รายจ่ายดำเนินงาน:</td><td style="text-align:right;font-weight:600;color:#e11d48;">-${formatMoney(report.expense)}</td></tr>
+              <tr><td style="padding:3px 0;color:#475569;">กระแสเงินสดสุทธิ:</td><td style="text-align:right;font-weight:700;color:${analysis.netCashFlow >= 0 ? '#059669' : '#e11d48'};">${analysis.netCashFlow >= 0 ? '+' : '-'}${formatMoney(Math.abs(analysis.netCashFlow))}</td></tr>
+            </table>
+          </div>
+
+          <div style="border:1px solid #cbd5e1;border-radius:8px;padding:12px;background:#f8fafc;">
+            <div style="font-weight:700;color:#b45309;margin-bottom:6px;font-size:13px;">🛡️ คุณภาพพอร์ต & ความเสี่ยงหนี้ค้างชำระ</div>
+            <table style="width:100%;font-size:12px;border-collapse:collapse;">
+              <tr><td style="padding:3px 0;color:#475569;">เงินต้นคงค้างในระบบรวม:</td><td style="text-align:right;font-weight:600;">${formatMoney(analysis.totalActivePrincipal)} (${analysis.totalActiveContracts} สัญญา)</td></tr>
+              <tr><td style="padding:3px 0;color:#475569;">ดอกเบี้ยค้างรับสะสม:</td><td style="text-align:right;font-weight:600;color:#b45309;">${formatMoney(analysis.totalUnpaidInterest)}</td></tr>
+              <tr><td style="padding:3px 0;color:#475569;">สัญญาที่เกินกำหนดชำระ:</td><td style="text-align:right;font-weight:600;color:${analysis.totalOverdueContracts > 0 ? '#e11d48' : '#059669'};">${analysis.totalOverdueContracts} สัญญา (${analysis.overdueRatePct.toFixed(1)}%)</td></tr>
+              <tr><td style="padding:3px 0;color:#475569;">ลูกค้าที่สร้างรายได้สูงสุด:</td><td style="text-align:right;font-weight:600;">${analysis.topCustomers.length > 0 ? escapeHtml(analysis.topCustomers[0].name) : '-'}</td></tr>
+            </table>
+          </div>
+        </div>
+      </div>
+    `);
+
+    blocks.push(`
+      <div style="margin-bottom:18px;border:1px solid #a7f3d0;background:#ecfdf5;border-radius:8px;padding:12px 14px;">
+        <div style="font-weight:700;color:#065f46;margin-bottom:6px;font-size:13px;">💡 สรุปผลการวิเคราะห์และข้อเสนอแนะเชิงกลยุทธ์ (Executive Summary)</div>
+        <ul style="margin:0;padding-left:18px;font-size:12px;color:#0f172a;line-height:1.55;">
+          ${analysis.insights.map(item => `<li style="margin-bottom:4px;">${escapeHtml(item)}</li>`).join('')}
+        </ul>
+      </div>
+    `);
+  }
+
+  // Transaction Table Blocks (chunked so multi-page PDFs never cut rows)
+  const sectionNum = includeAnalysis ? 3 : 2;
+  const tableHeadHtml = `
+    <thead>
+      <tr style="background:#1e293b;color:#ffffff;">
+        <th style="border:1px solid #1e293b;padding:7px 8px;text-align:center;width:38px;">#</th>
+        <th style="border:1px solid #1e293b;padding:7px 8px;text-align:left;width:85px;">วันที่</th>
+        <th style="border:1px solid #1e293b;padding:7px 8px;text-align:left;width:105px;">ประเภท</th>
+        <th style="border:1px solid #1e293b;padding:7px 8px;text-align:left;width:130px;">ลูกค้า</th>
+        <th style="border:1px solid #1e293b;padding:7px 8px;text-align:left;">รายละเอียด / หมายเหตุ</th>
+        <th style="border:1px solid #1e293b;padding:7px 8px;text-align:right;width:105px;">จำนวนเงิน</th>
+      </tr>
+    </thead>
+  `;
+
+  if (report.txs.length === 0) {
+    blocks.push(`
+      <div style="margin-bottom:18px;">
+        <div style="font-size:15px;font-weight:700;color:#0f172a;border-left:4px solid #3b82f6;padding-left:10px;margin-bottom:10px;">
+          ส่วนที่ ${sectionNum}: รายการธุรกรรมประจำเดือน (0 รายการ)
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          ${tableHeadHtml}
+          <tbody>
+            <tr><td colspan="6" style="text-align:center;padding:20px;color:#64748b;border:1px solid #cbd5e1;">ไม่มีรายการธุรกรรมในเดือนนี้</td></tr>
+          </tbody>
+        </table>
+      </div>
+    `);
+  } else {
+    const firstChunkSize = includeAnalysis ? 8 : 15;
+    const nextChunkSize = 18;
+    const chunks = [];
+    chunks.push({ startIdx: 0, items: report.txs.slice(0, firstChunkSize) });
+    for (let i = firstChunkSize; i < report.txs.length; i += nextChunkSize) {
+      chunks.push({ startIdx: i, items: report.txs.slice(i, i + nextChunkSize) });
+    }
+
+    chunks.forEach((chunk, cIdx) => {
+      const isLast = cIdx === chunks.length - 1;
+      const rowsHtml = chunk.items.map((t, offset) => {
+        const cust = report.customers.find(c => c.id === t.customerId);
+        const isIncome = t.type !== 'expense';
+        return `
+          <tr>
+            <td style="border:1px solid #cbd5e1;padding:6px 8px;text-align:center;">${chunk.startIdx + offset + 1}</td>
+            <td style="border:1px solid #cbd5e1;padding:6px 8px;white-space:nowrap;">${formatDate(t.date)}</td>
+            <td style="border:1px solid #cbd5e1;padding:6px 8px;">${escapeHtml(typeLabels[t.type] || t.type)}</td>
+            <td style="border:1px solid #cbd5e1;padding:6px 8px;">${escapeHtml(cust?.name || '-')}</td>
+            <td style="border:1px solid #cbd5e1;padding:6px 8px;color:#334155;">${escapeHtml(t.note || '-')}</td>
+            <td style="border:1px solid #cbd5e1;padding:6px 8px;text-align:right;font-weight:600;color:${isIncome ? '#059669' : '#e11d48'};white-space:nowrap;">
+              ${isIncome ? '+' : '-'}${formatMoney(t.amount)}
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      const tfootHtml = isLast ? `
+        <tfoot>
+          <tr style="background:#f1f5f9;font-weight:700;">
+            <td colspan="5" style="border:1px solid #cbd5e1;padding:8px;text-align:right;">รายรับสุทธิหักรายจ่าย (Cash Net):</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;text-align:right;color:#0f172a;">${formatMoney(report.income - report.expense)}</td>
+          </tr>
+        </tfoot>
+      ` : '';
+
+      blocks.push(`
+        <div style="margin-bottom:16px;">
+          <div style="font-size:15px;font-weight:700;color:#0f172a;border-left:4px solid #3b82f6;padding-left:10px;margin-bottom:10px;">
+            ส่วนที่ ${sectionNum}: รายการธุรกรรมประจำเดือน (${report.txs.length} รายการ)${cIdx > 0 ? ' (ต่อ)' : ''}
+          </div>
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            ${tableHeadHtml}
+            <tbody>${rowsHtml}</tbody>
+            ${tfootHtml}
+          </table>
+        </div>
+      `);
+    });
+  }
+
+  // Final Block: Signature Footer
+  blocks.push(`
+    <div style="margin-top:24px;display:flex;justify-content:space-between;align-items:flex-end;font-size:11.5px;color:#64748b;">
+      <div>เอกสารฉบับนี้สร้างโดยระบบอัตโนมัติ Vider Finance Dashboard</div>
+      <div style="text-align:center;min-width:210px;">
+        <div style="border-bottom:1px dotted #64748b;height:28px;margin-bottom:4px;"></div>
+        <div style="color:#0f172a;font-weight:600;">(${escapeHtml(managerName)})</div>
+        <div>ผู้จัดการ / ผู้ตรวจสอบรายงาน</div>
+      </div>
+    </div>
+  `);
+
+  return blocks;
+}
+
+async function exportReportToPDF() {
+  const month = parseInt(document.getElementById('reportMonth').value, 10);
+  const thYear = parseInt(document.getElementById('reportYear').value, 10);
+  const includeAnalysis = Boolean(document.getElementById('includeFinancialAnalysis')?.checked);
+
+  renderReportPage();
+
+  const report = computeMonthlyReportData(month, thYear);
+  const fileBaseName = `รายงานการเงิน_ViderFinance_${report.monthName}_${report.thYear}${includeAnalysis ? '_พร้อมวิเคราะห์การเงิน' : ''}`;
+  const blocks = buildReportPdfBlocks(report, includeAnalysis);
+
+  const pdfBtn = document.getElementById('exportPdfBtn');
+  const origBtnHtml = pdfBtn ? pdfBtn.innerHTML : '';
+
+  const JsPDFClass = window.jspdf?.jsPDF || window.jsPDF;
+
+  if (typeof window.html2canvas === 'function' && typeof JsPDFClass === 'function') {
+    let curtainEl = null;
+    let stageEl = null;
+    try {
+      if (pdfBtn) {
+        pdfBtn.disabled = true;
+        pdfBtn.innerHTML = '<span>⏳</span> กำลังสร้าง PDF...';
+      }
+
+      // Curtain keeps UI clean while stage renders at opacity: 1 inside viewport (0, 0)
+      curtainEl = document.createElement('div');
+      curtainEl.style.cssText = 'position:fixed;inset:0;z-index:20000;background:rgba(10,14,26,0.92);display:flex;flex-direction:column;align-items:center;justify-content:center;color:#f1f5f9;font-family:var(--font-body);';
+      curtainEl.innerHTML = '<div style="font-size:2.5rem;margin-bottom:12px;">📄</div><div style="font-size:1.15rem;font-weight:600;">กำลังสร้างไฟล์ PDF รายงานประจำเดือน...</div><div style="font-size:0.85rem;color:#94a3b8;margin-top:4px;">กรุณารอสักครู่</div>';
+      document.body.appendChild(curtainEl);
+
+      stageEl = document.createElement('div');
+      stageEl.style.cssText = 'position:fixed;top:0;left:0;width:794px;z-index:19999;background:#ffffff;color:#0f172a;opacity:1;pointer-events:none;font-family:"Noto Sans Thai","Inter",sans-serif;';
+      document.body.appendChild(stageEl);
+
+      if (document.fonts && document.fonts.ready) {
+        await document.fonts.ready;
+      }
+
+      // Paginate blocks onto A4 sheets (794 x 1123 px, usable inner height ~1015 px)
+      const PAGE_WIDTH = 794;
+      const PAGE_HEIGHT = 1123;
+      const MAX_INNER_HEIGHT = 1015;
+      const pages = [];
+
+      const createA4Page = () => {
+        const page = document.createElement('div');
+        page.style.cssText = `width:${PAGE_WIDTH}px;height:${PAGE_HEIGHT}px;padding:36px 42px 52px 42px;background:#ffffff;color:#0f172a;box-sizing:border-box;position:relative;overflow:hidden;font-family:'Noto Sans Thai','Inter',sans-serif;line-height:1.45;`;
+        const bodyWrap = document.createElement('div');
+        page.appendChild(bodyWrap);
+        stageEl.appendChild(page);
+        pages.push({ page, bodyWrap });
+        return pages[pages.length - 1];
+      };
+
+      let currentPage = createA4Page();
+
+      for (const blockHtml of blocks) {
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = blockHtml.trim();
+        const blockEl = wrapper.firstElementChild || wrapper;
+        currentPage.bodyWrap.appendChild(blockEl);
+
+        if (currentPage.bodyWrap.offsetHeight > MAX_INNER_HEIGHT && currentPage.bodyWrap.children.length > 1) {
+          currentPage.bodyWrap.removeChild(blockEl);
+          currentPage = createA4Page();
+          currentPage.bodyWrap.appendChild(blockEl);
+        }
+      }
+
+      // Add page numbers to every A4 sheet
+      pages.forEach((p, idx) => {
+        const pageNumEl = document.createElement('div');
+        pageNumEl.style.cssText = 'position:absolute;bottom:18px;left:42px;right:42px;display:flex;justify-content:space-between;font-size:10.5px;color:#94a3b8;border-top:1px solid #e2e8f0;padding-top:6px;';
+        pageNumEl.innerHTML = `<span>Vider Finance – รายงานประจำเดือน${report.monthName} ${report.thYear}</span><span>หน้า ${idx + 1} / ${pages.length}</span>`;
+        p.page.appendChild(pageNumEl);
+      });
+
+      // Small delay for layout & font paint
+      await new Promise(r => setTimeout(r, 120));
+
+      const pdf = new JsPDFClass({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
+
+      for (let i = 0; i < pages.length; i++) {
+        // Position only the active page at (0, 0) in stageEl so html2canvas captures exact bounds
+        pages.forEach((p, j) => {
+          p.page.style.display = i === j ? 'block' : 'none';
+        });
+        const canvas = await window.html2canvas(pages[i].page, {
+          scale: 2,
+          useCORS: true,
+          backgroundColor: '#ffffff',
+          width: PAGE_WIDTH,
+          height: PAGE_HEIGHT,
+          windowWidth: PAGE_WIDTH,
+          windowHeight: PAGE_HEIGHT,
+          scrollX: 0,
+          scrollY: 0,
+          logging: false,
+        });
+        const imgData = canvas.toDataURL('image/jpeg', 0.95);
+        if (i > 0) pdf.addPage();
+        pdf.addImage(imgData, 'JPEG', 0, 0, 210, 297);
+      }
+
+      const pdfBlob = pdf.output('blob');
+      triggerBlobDownload(pdfBlob, `${fileBaseName}.pdf`);
+      showToast(`ดาวน์โหลดไฟล์ PDF (${fileBaseName}.pdf) สำเร็จ`);
+      return;
+    } catch (err) {
+      console.error('Direct PDF generation failed, falling back to Print dialog:', err);
+    } finally {
+      if (stageEl && stageEl.parentNode) stageEl.remove();
+      if (curtainEl && curtainEl.parentNode) curtainEl.remove();
+      if (pdfBtn) {
+        pdfBtn.disabled = false;
+        pdfBtn.innerHTML = origBtnHtml;
+      }
+    }
+  }
+
+  // Offline Fallback: Open clean print window (Save as PDF)
+  const printWin = window.open('', '_blank', 'width=900,height=800');
+  if (!printWin) {
+    showToast('กรุณาอนุญาตป๊อปอัปเพื่อบันทึกเป็น PDF', 'error');
+    return;
+  }
+  printWin.document.write(`
+    <!DOCTYPE html>
+    <html lang="th">
+    <head>
+      <meta charset="UTF-8" />
+      <title>${fileBaseName}</title>
+      <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@300;400;500;600;700&family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+      <style>
+        @page { size: A4 portrait; margin: 12mm; }
+        body { margin: 0; padding: 16px; background: #fff; color: #0f172a; font-family: 'Noto Sans Thai', 'Inter', sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      </style>
+    </head>
+    <body>
+      ${blocks.join('')}
+      <script>
+        window.onload = () => { setTimeout(() => { window.print(); }, 400); };
+      </script>
+    </body>
+    </html>
+  `);
+  printWin.document.close();
+  showToast('เปิดหน้าต่างสำหรับบันทึก PDF แล้ว');
+}
+
+window.exportReportToExcel = exportReportToExcel;
+window.exportReportToPDF = exportReportToPDF;
+
+document.getElementById('exportExcelBtn')?.addEventListener('click', exportReportToExcel);
+document.getElementById('exportPdfBtn')?.addEventListener('click', exportReportToPDF);
 
 // ============================================================
 

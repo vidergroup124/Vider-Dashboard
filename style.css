@@ -65,6 +65,10 @@
   /* Transitions */
   --transition: 0.2s ease;
   --transition-slow: 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Checkbox SVG masks */
+  --icon-check: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'></polyline></svg>");
+  --icon-dash: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='4.5' stroke-linecap='round' stroke-linejoin='round'><line x1='5' y1='12' x2='19' y2='12'></line></svg>");
 }
 
 /* === Reset & Base === */
@@ -715,9 +719,245 @@ body {
 .btn-danger:hover { filter: brightness(1.1); }
 
 /* === Reports === */
+.kpi-card.daily-total { border-left: 3px solid var(--accent-purple); }
+.kpi-card.daily-total::before { background: linear-gradient(135deg, var(--accent-purple-dim), transparent); }
+
 .report-filters { margin-bottom: var(--space-lg); }
 .filter-row { display: flex; align-items: center; gap: var(--space-md); flex-wrap: wrap; }
 .filter-row label { display: flex; flex-direction: column; gap: var(--space-xs); font-size: 0.85rem; color: var(--text-secondary); }
+
+.report-controls-row {
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: var(--space-lg);
+}
+
+.report-period-group {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+}
+
+.report-export-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+  padding-left: var(--space-md);
+  border-left: 1px solid var(--border-color);
+}
+
+.filter-row label.checkbox-label {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.65rem;
+  min-block-size: 44px;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-weight: 500;
+  font-size: 0.9rem;
+  background: var(--bg-elevated);
+  padding: 0 var(--space-md);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  transition: border-color var(--transition), background var(--transition);
+  user-select: none;
+}
+
+.filter-row label.checkbox-label:hover {
+  border-color: var(--accent-gold);
+  background: var(--bg-card-hover);
+}
+
+.checkbox-custom {
+  --checkbox-size: 1.25em;
+  --checkbox-icon-size: 0.7em;
+
+  appearance: none;
+  display: inline-grid;
+  place-content: center;
+  inline-size: var(--checkbox-size);
+  aspect-ratio: 1;
+  margin: 0;
+  border: 2px solid var(--accent-gold);
+  border-radius: 4px;
+  color: var(--accent-gold);
+  background: rgba(245, 158, 11, 0.08);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.checkbox-custom::before {
+  content: "";
+  inline-size: var(--checkbox-icon-size);
+  aspect-ratio: 1;
+  background-color: var(--bg-base);
+  mask: var(--checkbox-icon) no-repeat center / contain;
+  scale: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .checkbox-custom::before {
+    transition: scale 150ms ease;
+  }
+}
+
+@media (forced-colors: active) {
+  .checkbox-custom::before {
+    background-color: CanvasText;
+  }
+}
+
+.checkbox-custom:checked {
+  --checkbox-icon: var(--icon-check);
+  background-color: var(--accent-gold);
+}
+
+.checkbox-custom:indeterminate {
+  --checkbox-icon: var(--icon-dash);
+  background-color: var(--accent-gold);
+}
+
+.checkbox-custom:is(:checked, :indeterminate)::before {
+  scale: 1;
+}
+
+.checkbox-custom:focus-visible {
+  outline: 2px solid var(--accent-gold);
+  outline-offset: 2px;
+}
+
+.checkbox-custom:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.export-btns {
+  display: flex;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.btn-export-excel {
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.25);
+}
+
+.btn-export-excel:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35);
+}
+
+.btn-export-pdf {
+  background: linear-gradient(135deg, #f43f5e, #e11d48);
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(244, 63, 94, 0.25);
+}
+
+.btn-export-pdf:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(244, 63, 94, 0.35);
+}
+
+/* Financial Analysis Card */
+.financial-analysis-card {
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.04) 0%, var(--bg-card) 100%);
+}
+
+.analysis-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+
+.analysis-box {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+}
+
+.analysis-box-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--accent-gold);
+  margin-bottom: var(--space-sm);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.analysis-stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.06);
+  font-size: 0.85rem;
+}
+
+.analysis-stat-row:last-child {
+  border-bottom: none;
+}
+
+.analysis-stat-label {
+  color: var(--text-secondary);
+}
+
+.analysis-stat-val {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.analysis-insights {
+  background: rgba(16, 185, 129, 0.06);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+}
+
+.analysis-insights-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--accent-emerald);
+  margin-bottom: var(--space-sm);
+}
+
+.analysis-insight-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.analysis-insight-list li {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  line-height: 1.5;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+@media (max-width: 768px) {
+  .report-export-group {
+    padding-left: 0;
+    border-left: none;
+    border-top: 1px solid var(--border-color);
+    padding-top: var(--space-md);
+    width: 100%;
+  }
+}
 
 .report-kpi {
   display: grid;

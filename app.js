@@ -136,6 +136,7 @@ function triggerRender() {
          else if (page === 'daily') renderDaily(document.getElementById('dailySearch').value, document.getElementById('dailyStatusFilter').value);
          else if (page === 'pawns') renderPawns(document.getElementById('pawnSearch').value, document.getElementById('pawnStatusFilter').value);
          else if (page === 'transactions') renderTransactions();
+         else if (page === 'reports') renderReportPage();
       }
   }, 100);
 }
@@ -1333,8 +1334,8 @@ function renderTransactions(filter = '', typeFilter = '') {
     return;
   }
 
-  const typeLabels = { interest: 'รับดอกเบี้ย', loan_payment: 'รับคืนเงินกู้', pawn_redeem: 'ไถ่จำนำ', expense: 'รายจ่าย' };
-  const typeBadges = { interest: 'badge-interest', loan_payment: 'badge-loan', pawn_redeem: 'badge-pawn', expense: 'badge-expense' };
+  const typeLabels = { interest: 'รับดอกเบี้ย', daily_payment: 'รับกู้รายวัน', loan_payment: 'รับคืนเงินกู้', pawn_redeem: 'ไถ่จำนำ', expense: 'รายจ่าย' };
+  const typeBadges = { interest: 'badge-interest', daily_payment: 'badge-loan', loan_payment: 'badge-loan', pawn_redeem: 'badge-pawn', expense: 'badge-expense' };
 
   tbody.innerHTML = txs.map((t, i) => {
     const cust = customers.find(c => c.id === t.customerId);
@@ -1504,8 +1505,8 @@ document.getElementById('generateReport').addEventListener('click', () => {
   
   document.getElementById('report-pawn-interest').textContent = formatMoney(pawnInterest);
 
-  const typeLabels = { interest: 'รับดอกเบี้ย', loan_payment: 'รับคืนเงินกู้', pawn_redeem: 'ไถ่จำนำ', expense: 'รายจ่าย' };
-  const typeBadges = { interest: 'badge-interest', loan_payment: 'badge-loan', pawn_redeem: 'badge-pawn', expense: 'badge-expense' };
+  const typeLabels = { interest: 'รับดอกเบี้ย', daily_payment: 'รับกู้รายวัน', loan_payment: 'รับคืนเงินกู้', pawn_redeem: 'ไถ่จำนำ', expense: 'รายจ่าย' };
+  const typeBadges = { interest: 'badge-interest', daily_payment: 'badge-loan', loan_payment: 'badge-loan', pawn_redeem: 'badge-pawn', expense: 'badge-expense' };
 
   const tbody = document.getElementById('reportTxBody');
   if (txs.length === 0) {

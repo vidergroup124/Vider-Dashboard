@@ -457,31 +457,51 @@
       <!-- Reports Page -->
       <section class="page" id="page-reports">
         <div class="page-header">
-          <h1>รายงานการเงิน</h1>
+          <div>
+            <h1>รายงานการเงินประจำเดือน</h1>
+            <p class="page-subtitle">สรุปผลประกอบการ รายการธุรกรรม และส่งออกไฟล์รายงาน (Excel / PDF)</p>
+          </div>
         </div>
 
         <div class="report-filters card">
-          <div class="filter-row">
-            <label>เดือน:
-              <select id="reportMonth" class="filter-select">
-                <option value="0">มกราคม</option>
-                <option value="1">กุมภาพันธ์</option>
-                <option value="2">มีนาคม</option>
-                <option value="3">เมษายน</option>
-                <option value="4">พฤษภาคม</option>
-                <option value="5">มิถุนายน</option>
-                <option value="6">กรกฎาคม</option>
-                <option value="7">สิงหาคม</option>
-                <option value="8">กันยายน</option>
-                <option value="9">ตุลาคม</option>
-                <option value="10">พฤศจิกายน</option>
-                <option value="11">ธันวาคม</option>
-              </select>
-            </label>
-            <label>ปี:
-              <input type="number" id="reportYear" class="filter-select" value="2567" min="2560" max="2580" />
-            </label>
-            <button class="btn btn-primary" id="generateReport">สร้างรายงาน</button>
+          <div class="filter-row report-controls-row">
+            <div class="report-period-group">
+              <label for="reportMonth">เดือน:
+                <select id="reportMonth" class="filter-select">
+                  <option value="0">มกราคม</option>
+                  <option value="1">กุมภาพันธ์</option>
+                  <option value="2">มีนาคม</option>
+                  <option value="3">เมษายน</option>
+                  <option value="4">พฤษภาคม</option>
+                  <option value="5">มิถุนายน</option>
+                  <option value="6">กรกฎาคม</option>
+                  <option value="7">สิงหาคม</option>
+                  <option value="8">กันยายน</option>
+                  <option value="9">ตุลาคม</option>
+                  <option value="10">พฤศจิกายน</option>
+                  <option value="11">ธันวาคม</option>
+                </select>
+              </label>
+              <label for="reportYear">ปี (พ.ศ.):
+                <input type="number" id="reportYear" class="filter-select" value="2567" min="2560" max="2590" />
+              </label>
+              <button type="button" class="btn btn-primary" id="generateReport">🔍 สร้างรายงาน</button>
+            </div>
+
+            <div class="report-export-group">
+              <label class="checkbox-label" for="includeFinancialAnalysis">
+                <input type="checkbox" id="includeFinancialAnalysis" class="checkbox-custom" checked />
+                <span>วิเคราะห์การเงินเพิ่มเติม (Financial Analysis)</span>
+              </label>
+              <div class="export-btns">
+                <button type="button" class="btn btn-export-excel" id="exportExcelBtn" title="ส่งออกรายงานเป็นไฟล์ Excel (.xlsx)">
+                  <span>📊</span> Export Excel
+                </button>
+                <button type="button" class="btn btn-export-pdf" id="exportPdfBtn" title="ส่งออกรายงานเป็นไฟล์ PDF">
+                  <span>📄</span> Export PDF
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -515,18 +535,39 @@
             </div>
           </div>
           <div class="kpi-card pawn-total">
-            <div class="kpi-icon">🔄</div>
+            <div class="kpi-icon">💍</div>
             <div class="kpi-content">
               <div class="kpi-label">ดอกรับ (จำนำ)</div>
               <div class="kpi-value" id="report-pawn-interest">฿0</div>
             </div>
           </div>
+          <div class="kpi-card expense">
+            <div class="kpi-icon">📤</div>
+            <div class="kpi-content">
+              <div class="kpi-label">รายจ่ายทั้งหมด</div>
+              <div class="kpi-value" id="report-expense">฿0</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Financial Analysis Section (toggled via checkbox) -->
+        <div class="card financial-analysis-card" id="financialAnalysisSection">
+          <div class="card-header">
+            <h2 class="card-title">🧠 บทวิเคราะห์การเงินเชิงลึก (Financial Analysis)</h2>
+            <span class="card-badge" id="analysisPeriodBadge">ประจำเดือน</span>
+          </div>
+          <div id="financialAnalysisContent" class="analysis-content">
+            <div class="empty-state">กดสร้างรายงานเพื่อดูบทวิเคราะห์การเงิน</div>
+          </div>
         </div>
 
         <div class="card">
-          <div class="card-header"><h2 class="card-title">รายการในช่วงเวลา</h2></div>
+          <div class="card-header">
+            <h2 class="card-title">รายการในช่วงเวลา</h2>
+            <span class="card-badge" id="reportTxCount">0 รายการ</span>
+          </div>
           <div class="table-wrap">
-            <table class="data-table">
+            <table class="data-table" id="reportTxTable">
               <thead>
                 <tr><th>วันที่</th><th>ประเภท</th><th>ลูกค้า</th><th>รายละเอียด</th><th>เงิน</th></tr>
               </thead>
@@ -952,7 +993,10 @@
   <!-- Toast Notification -->
   <div class="toast-container" id="toastContainer" aria-live="polite"></div>
 
-  <script src="app.js?v=3"></script>
+  <!-- Export Libraries (with offline fallbacks in app.js) -->
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" defer></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" defer></script>
+  <script src="app.js?v=4"></script>
   </div>
 
   <script>
